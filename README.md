@@ -14,7 +14,8 @@ Bot de Discord en español con reproductor musical, gestión de roles, mensajes 
 ## Requisitos
 
 - Node.js **24.17.0 o superior**.
-- FFmpeg para audio. Docker lo instala automáticamente.
+- Python 3.11 o superior y FFmpeg para audio. Docker instala ambos automáticamente.
+- `npm ci` instala `youtube-dl-exec`, que descarga la versión estable actual de yt-dlp.
 - Una aplicación de bot creada en [Discord Developer Portal](https://discord.com/developers/applications).
 - El secreto `DISCORD_TOKEN`. Nunca lo guardes en el código ni lo subas al repositorio.
 
@@ -47,10 +48,11 @@ npm run dev
 ```
 
 El archivo `.env` está excluido de Git. La carpeta `data/` guarda configuración local y también está excluida.
+El reproductor usa yt-dlp para buscar y abrir audio; al instalar dependencias se descarga su binario oficial actual. En Linux asegúrate de tener Python 3.11+ y FFmpeg.
 
 ## Railway
 
-El repositorio incluye un `Dockerfile`; Railway lo detecta y prepara Node.js y FFmpeg.
+El repositorio incluye un `Dockerfile`; Railway lo detecta y prepara Node.js, Python 3.11+, FFmpeg y el binario actual de yt-dlp.
 
 1. Crea un proyecto y agrega un servicio desde el repositorio de GitHub.
 2. Usa la raíz del repositorio como directorio de servicio.
@@ -86,7 +88,7 @@ docker compose logs -f
 
 ### Linux con PM2
 
-Instala Node.js 24.17+, FFmpeg y PM2. Desde la carpeta del bot:
+Instala Node.js 24.17+, Python 3.11+, FFmpeg y PM2. Desde la carpeta del bot:
 
 ```bash
 npm ci
@@ -148,7 +150,7 @@ npm run typecheck
 npm run build
 ```
 
-Actualiza dependencias con cuidado y prueba voz, permisos e intents antes de volver a desplegar. YouTube y las bibliotecas de extracción pueden cambiar sus restricciones o funcionamiento; reproduce únicamente contenido que tengas derecho a usar y respeta los términos de la plataforma.
+Actualiza dependencias con cuidado y prueba voz, permisos e intents antes de volver a desplegar. La búsqueda y el audio se extraen con yt-dlp, descargado desde su distribución oficial durante la instalación. YouTube puede cambiar sus restricciones o funcionamiento; reproduce únicamente contenido que tengas derecho a usar y respeta los términos de la plataforma.
 
 ## Documentación consultada
 

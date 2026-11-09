@@ -1,6 +1,7 @@
 import {
   AudioPlayerStatus,
   NoSubscriberBehavior,
+  StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -16,11 +17,23 @@ import type {
   MessageCreateOptions,
   VoiceBasedChannel,
 } from "discord.js";
-import play from "play-dl";
+import ytDlp from "youtube-dl-exec";
 import type { LoopMode, MusicSnapshot, Track } from "./types.js";
 
 const DEFAULT_QUEUE_LIMIT = 50;
 const IDLE_DISCONNECT_MS = 3 * 60 * 1000;
+
+interface YtDlpInfo {
+  id?: string;
+  title?: string;
+  webpage_url?: string;
+  url?: string;
+  duration?: number | null;
+  duration_string?: string;
+  thumbnail?: string;
+  thumbnails?: Array<{ url: string }>;
+  entries?: YtDlpInfo[] | null;
+}
 
 interface EnqueueOptions {
   guild: Guild;
@@ -81,6 +94,7 @@ export class GuildMusic {
   private queue: Track[] = [];
   private current?: Track;
   private currentResource?: AudioResource<Track>;
+  private currentExtractor?: ReturnType<typeof ytDlp.exec>;
   private loopMode: LoopMode = "off";
   private volume = 70;
   private startedAt = 0;
@@ -98,10 +112,17 @@ export class GuildMusic {
     });
     this.player.on(AudioPlayerStatus.Idle, () => this.onIdle());
     this.player.on("error", (error) => {
-      console.error(`[music:${this.guildId}] Error al reproducir:`, error.message);
-      void this.sendNotice("Una canción falló y se omitió.");
+      const failedTrack = this.current;
+      if (!failedTrack) return;
+      console.error(`[music:${this.guildId}] Error al reproducir:`, error.message.slice(0, 240));
+      this.currentExtractor?.kill("SIGTERM");
+      this.currentExtractor = undefined;
       this.current = undefined;
-      void this.startNext();
+      this.currentResource = undefined;
+      this.startedAt = 0;
+      const stopped = this.player.stop(true);
+      void this.sendNotice(`No pude reproducir **${failedTrack.title.slice(0, 120)}**. La salté.`);
+      if (!stopped) void this.startNext();
     });
   }
 
@@ -173,11 +194,24 @@ export class GuildMusic {
 
   skip(): boolean {
     if (!this.current) return false;
+    const extractor = this.currentExtractor;
+    this.currentExtractor = undefined;
+    extractor?.kill("SIGTERM");
     this.skipRequested = true;
-    return this.player.stop(true);
+    const stopped = this.player.stop(true);
+    if (!stopped) {
+      this.skipRequested = false;
+      this.current = undefined;
+      this.currentResource = undefined;
+      void this.startNext();
+    }
+    return stopped;
   }
 
   stop(): void {
+    const extractor = this.currentExtractor;
+    this.currentExtractor = undefined;
+    extractor?.kill("SIGTERM");
     this.queue = [];
     this.current = undefined;
     this.currentResource = undefined;
@@ -220,6 +254,9 @@ export class GuildMusic {
 
   destroy(): void {
     this.clearIdleTimer();
+    const extractor = this.currentExtractor;
+    this.currentExtractor = undefined;
+    extractor?.kill("SIGTERM");
     this.queue = [];
     this.current = undefined;
     this.currentResource = undefined;
@@ -243,9 +280,21 @@ export class GuildMusic {
 
         const track = this.current;
         try {
-          const audio = await play.stream(track.url, { discordPlayerCompatibility: true });
-          const resource = createAudioResource<Track>(audio.stream, {
-            inputType: audio.type,
+          const extractor = ytDlp.exec(
+            track.url,
+            {
+              format: "bestaudio/best",
+              output: "-",
+              noWarnings: true,
+              noProgress: true,
+              noPlaylist: true,
+            },
+            { timeout: 30 * 60 * 1000 },
+          );
+          this.currentExtractor = extractor;
+          if (!extractor.stdout) throw new Error("yt-dlp no abrió su salida de audio.");
+          const resource = createAudioResource<Track>(extractor.stdout, {
+            inputType: StreamType.Arbitrary,
             inlineVolume: true,
             metadata: track,
           });
@@ -253,11 +302,22 @@ export class GuildMusic {
           this.currentResource = resource;
           this.startedAt = Date.now();
           this.player.play(resource);
+          void extractor.then(
+            () => {
+              if (this.currentExtractor === extractor) this.currentExtractor = undefined;
+            },
+            (error: unknown) => this.onExtractorFailure(extractor, track, error),
+          );
           await this.sendNowPlaying(track);
           return;
         } catch (error) {
-          console.error(`[music:${this.guildId}] No se pudo abrir una canción:`, error);
-          await this.sendNotice(`No pude reproducir **${track.title.slice(0, 120)}**. La salté.`);
+          console.error(
+            `[music:${this.guildId}] No se pudo iniciar yt-dlp:`,
+            describeExtractorError(error).slice(0, 240),
+          );
+          this.currentExtractor?.kill("SIGTERM");
+          this.currentExtractor = undefined;
+          await this.sendNotice(`No pude abrir **${track.title.slice(0, 120)}**. La salté.`);
           this.current = undefined;
           this.currentResource = undefined;
           this.startedAt = 0;
@@ -266,6 +326,25 @@ export class GuildMusic {
     } finally {
       this.starting = false;
     }
+  }
+
+  private onExtractorFailure(
+    extractor: ReturnType<typeof ytDlp.exec>,
+    track: Track,
+    error: unknown,
+  ): void {
+    if (this.currentExtractor !== extractor || this.current?.url !== track.url) return;
+    this.currentExtractor = undefined;
+    console.error(
+      `[music:${this.guildId}] yt-dlp terminó con error:`,
+      describeExtractorError(error).slice(0, 240),
+    );
+    this.current = undefined;
+    this.currentResource = undefined;
+    this.startedAt = 0;
+    const stopped = this.player.stop(true);
+    void this.sendNotice(`No pude reproducir **${track.title.slice(0, 120)}**. La salté.`);
+    if (!stopped) void this.startNext();
   }
 
   private onIdle(): void {
@@ -327,42 +406,74 @@ export class GuildMusic {
 async function resolveTrack(query: string, requestedBy: string): Promise<Track> {
   const trimmedQuery = query.trim();
   if (!trimmedQuery) throw new Error("Escribe el nombre de una canción o una URL de YouTube.");
+  if (trimmedQuery.length > 300) throw new Error("La búsqueda no puede superar los 300 caracteres.");
 
-  if (/^https?:\/\//i.test(trimmedQuery)) {
+  const isUrl = /^https?:\/\//i.test(trimmedQuery);
+  let input = `ytsearch1:${trimmedQuery}`;
+  if (isUrl) {
     const parsed = new URL(trimmedQuery);
     const isYouTube =
       parsed.hostname === "youtu.be" ||
       parsed.hostname.endsWith(".youtube.com") ||
       parsed.hostname === "youtube.com";
-    if (!isYouTube) {
-      throw new Error("Por ahora acepto búsquedas y enlaces de YouTube.");
+    if (parsed.protocol !== "https:" || !isYouTube) {
+      throw new Error("Por ahora acepto búsquedas y enlaces seguros de YouTube.");
     }
-
-    const info = await play.video_basic_info(trimmedQuery);
-    const video = info.video_details;
-    return {
-      title: video.title || "Video de YouTube",
-      url: video.url || trimmedQuery,
-      duration: video.durationRaw || "—",
-      thumbnailUrl: video.thumbnails?.[0]?.url,
-      requestedBy,
-    };
+    input = trimmedQuery;
   }
 
-  const results = await play.search(trimmedQuery, {
-    limit: 1,
-    source: { youtube: "video" },
-  });
-  const video = results?.[0];
-  if (!video?.url) throw new Error("No encontré resultados. Prueba con otro título o un enlace.");
+  let result: YtDlpInfo;
+  try {
+    const output = await ytDlp.exec(
+      input,
+      {
+        dumpSingleJson: true,
+        skipDownload: true,
+        noWarnings: true,
+        noProgress: true,
+        ...(isUrl ? { noPlaylist: true } : { playlistEnd: 1 }),
+      },
+      { timeout: 45_000 },
+    );
+    result = JSON.parse(output.stdout) as YtDlpInfo;
+  } catch {
+    throw new Error("No pude buscar esa canción en YouTube. Prueba otro título o pega un enlace.");
+  }
 
+  const video = result.entries?.[0] ?? result;
+  const url =
+    video.webpage_url ??
+    (video.id ? `https://www.youtube.com/watch?v=${video.id}` : undefined) ??
+    (isUrl ? trimmedQuery : undefined);
+  if (!video.title || !url) {
+    throw new Error("No encontré un resultado disponible. Prueba otro título o un enlace.");
+  }
   return {
-    title: video.title || "Video de YouTube",
-    url: video.url,
-    duration: video.durationRaw || "—",
-    thumbnailUrl: video.thumbnails?.[0]?.url,
+    title: video.title,
+    url,
+    duration: video.duration_string || formatDuration(video.duration) || "—",
+    thumbnailUrl: video.thumbnail ?? video.thumbnails?.[0]?.url,
     requestedBy,
   };
+}
+
+function formatDuration(seconds: number | null | undefined): string | undefined {
+  if (seconds === undefined || seconds === null || !Number.isFinite(seconds)) return undefined;
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = total % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function describeExtractorError(error: unknown): string {
+  if (typeof error === "object" && error !== null && "stderr" in error) {
+    const stderr = (error as { stderr?: unknown }).stderr;
+    if (typeof stderr === "string" && stderr.trim()) return stderr.trim();
+  }
+  return error instanceof Error ? error.message : "Error desconocido de extracción";
 }
 
 function readQueueLimit(): number {

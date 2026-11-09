@@ -18,7 +18,7 @@
     "discord.js": "^14.28.0",
     "dotenv": "^16.6.1",
     "opusscript": "^0.1.1",
-    "play-dl": "^1.9.7"
+    "youtube-dl-exec": "^3.1.19"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

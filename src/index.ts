@@ -32,7 +32,7 @@ const music = new MusicManager(client);
 const commands = new CommandHandler(music, configStore);
 const cooldowns = new Map<string, number>();
 
-client.once("ready", (readyClient) => {
+client.once("clientReady", (readyClient) => {
   console.info(`[startup] LZ BOT conectado como ${readyClient.user.tag}.`);
   console.info(`[startup] En línea en ${readyClient.guilds.cache.size} servidor(es).`);
 });
