@@ -114,18 +114,26 @@ Ejecuta el comando que imprime `pm2 startup` para habilitar el arranque del serv
 | `!lz setup` | Muestra requisitos e instrucciones |
 | `!play <canción o URL>` | Busca en YouTube o reproduce una URL compatible |
 | `!queue` | Muestra la canción actual y las siguientes |
-| `!nowplaying` | Muestra qué está sonando |
+| `!nowplaying` | Muestra qué está sonando y sus botones de control |
+| `!previous` | Vuelve a la canción anterior del historial |
 | `!pause` / `!resume` | Pausa o reanuda |
 | `!skip` | Omite la canción actual |
-| `!volume <0–100>` | Cambia el volumen |
+| `!volume <0–150>` | Ajusta volumen; sobre 100% puede distorsionar |
+| `!volume +10/-10` / `!vol+` / `!vol-` | Sube o baja el volumen en pasos |
 | `!loop off\|track\|queue` | Desactiva o configura la repetición |
 | `!shuffle` | Mezcla las canciones en espera |
 | `!remove <n>` | Quita una canción por su posición en la cola |
 | `!clearqueue` | Vacía la cola sin detener la canción actual |
 | `!stop` / `!leave` | Detiene la música o sale del canal de voz |
+| Botones en `!nowplaying` | Anterior, pausa, siguiente, volumen ±10, mezclar, repetir, cola y detener |
 | `!rol crear <nombre> [#HEX]` | Crea un rol con color opcional |
 | `!rol asignar @persona @rol` | Asigna un rol |
 | `!rol quitar @persona @rol` | Retira un rol |
+| `!rol lista [página]` | Lista roles personalizados |
+| `!rol info @rol` | Muestra color, posición y miembros visibles |
+| `!rol renombrar @rol <nombre>` | Cambia el nombre de un rol |
+| `!rol color @rol #HEX` | Cambia el color |
+| `!rol mencionar @rol on\|off` | Activa o desactiva menciones al rol |
 | `!lz bienvenida #canal` | Configura el canal de bienvenida |
 | `!lz despedida #canal` | Configura el canal de despedida |
 | `!lz bienvenida off` / `!lz despedida off` | Desactiva la función |

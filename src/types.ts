@@ -19,4 +19,6 @@ export interface MusicSnapshot {
   loopMode: LoopMode;
   volume: number;
   elapsedSeconds: number;
+  paused: boolean;
+  previousCount: number;
 }

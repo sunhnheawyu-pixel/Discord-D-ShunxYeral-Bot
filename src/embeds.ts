@@ -1,5 +1,7 @@
 import {
   ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder,
   StringSelectMenuBuilder,
   type StringSelectMenuInteraction,
@@ -78,10 +80,10 @@ export function categoryEmbed(
         "`!play <canción o URL>` — buscar y añadir música",
         "`!queue` — ver la cola",
         "`!nowplaying` — canción actual",
-        "`!pause` · `!resume` · `!skip`",
-        "`!volume <0–100>` — ajustar volumen",
-        "`!loop off|track|queue` — cambiar repetición",
-        "`!shuffle` · `!remove <n>` · `!clearqueue`",
+        "`!previous` · `!pause` · `!resume` · `!skip`",
+        "`!volume <0–150>` · `!volume +10/-10` · `!vol+` · `!vol-`",
+        "`!loop off|track|queue` · `!shuffle`",
+        "`!remove <n>` · `!clearqueue` · controles con botones",
         "`!stop` · `!leave` — detener o salir del canal",
       ],
     },
@@ -105,6 +107,10 @@ export function categoryEmbed(
         "`!rol crear <nombre> [#HEX]` — crear rol",
         "`!rol asignar @persona @rol` — asignar rol",
         "`!rol quitar @persona @rol` — quitar rol",
+        "`!rol lista [página]` — listar roles",
+        "`!rol info @rol` — ver detalles",
+        "`!rol renombrar @rol <nombre>` · `!rol color @rol #HEX`",
+        "`!rol mencionar @rol on|off` — permitir menciones",
       ],
     },
     moderation: {
@@ -131,18 +137,90 @@ export function categoryEmbed(
 
 export function musicNowPlayingEmbed(
   track: Track,
-  elapsedSeconds: number,
+  snapshot: MusicSnapshot,
 ): EmbedBuilder {
+  const loopLabel = snapshot.loopMode === "off"
+    ? "apagada"
+    : snapshot.loopMode === "track"
+      ? "canción"
+      : "cola";
   const embed = new EmbedBuilder()
     .setColor(LZ_COLOR)
     .setAuthor({ name: "LZ MUSIC  /  AHORA SUENA" })
     .setTitle(track.title.slice(0, 250))
     .setURL(track.url)
     .setDescription(
-      `**Duración:** ${track.duration || "Desconocida"}\n**Solicitó:** ${track.requestedBy}\n**Avance:** ${formatTime(elapsedSeconds)} / ${track.duration || "—"}`,
+      `**Duración:** ${track.duration || "Desconocida"}\n**Solicitó:** ${track.requestedBy}\n**Avance:** ${formatTime(snapshot.elapsedSeconds)} / ${track.duration || "—"}`,
+    )
+    .addFields(
+      { name: "Volumen", value: `**${snapshot.volume}%**`, inline: true },
+      { name: "Repetición", value: `**${loopLabel}**`, inline: true },
     );
   if (track.thumbnailUrl) embed.setThumbnail(track.thumbnailUrl);
   return embed;
+}
+
+export function musicNowPlayingPayload(track: Track, snapshot: MusicSnapshot) {
+  const loopLabel = snapshot.loopMode === "off"
+    ? "Repetir"
+    : snapshot.loopMode === "track"
+      ? "Repetir canción"
+      : "Repetir cola";
+  const mainControls = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("lz-music:previous")
+      .setLabel("Anterior")
+      .setEmoji("⏮️")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(snapshot.previousCount === 0),
+    new ButtonBuilder()
+      .setCustomId("lz-music:toggle")
+      .setLabel(snapshot.paused ? "Reanudar" : "Pausar")
+      .setEmoji(snapshot.paused ? "▶️" : "⏸️")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("lz-music:skip")
+      .setLabel("Siguiente")
+      .setEmoji("⏭️")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("lz-music:volume-down")
+      .setLabel("−10")
+      .setEmoji("🔉")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("lz-music:volume-up")
+      .setLabel("+10")
+      .setEmoji("🔊")
+      .setStyle(ButtonStyle.Secondary),
+  );
+  const extraControls = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("lz-music:shuffle")
+      .setLabel("Mezclar")
+      .setEmoji("🔀")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("lz-music:loop")
+      .setLabel(loopLabel)
+      .setEmoji("🔁")
+      .setStyle(snapshot.loopMode === "off" ? ButtonStyle.Secondary : ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("lz-music:queue")
+      .setLabel("Cola")
+      .setEmoji("📃")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("lz-music:stop")
+      .setLabel("Detener")
+      .setEmoji("⏹️")
+      .setStyle(ButtonStyle.Danger),
+  );
+
+  return {
+    embeds: [musicNowPlayingEmbed(track, snapshot)],
+    components: [mainControls, extraControls],
+  };
 }
 
 export function musicQueueEmbed(snapshot: MusicSnapshot): EmbedBuilder {

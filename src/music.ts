@@ -12,11 +12,17 @@ import {
   type VoiceConnection,
 } from "@discordjs/voice";
 import type {
+  ButtonInteraction,
   Client,
   Guild,
   MessageCreateOptions,
   VoiceBasedChannel,
 } from "discord.js";
+import {
+  musicNowPlayingPayload,
+  musicQueueEmbed,
+  successEmbed,
+} from "./embeds.js";
 import ytDlp from "youtube-dl-exec";
 import type { LoopMode, MusicSnapshot, Track } from "./types.js";
 
@@ -75,6 +81,98 @@ export class MusicManager {
 
   constructor(private readonly client: Client) {}
 
+  async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
+    const action = interaction.customId.slice("lz-music:".length);
+    try {
+      await interaction.deferReply({ ephemeral: true });
+      const guild = interaction.guild;
+      const player = guild ? this.get(guild.id) : undefined;
+      if (!guild || !player) {
+        await interaction.editReply({ content: "No hay una reproducción activa en este servidor." });
+        return;
+      }
+
+      const member = await guild.members.fetch(interaction.user.id).catch(() => null);
+      if (!member?.voice.channelId || member.voice.channelId !== player.voiceChannelId()) {
+        await interaction.editReply({ content: "Entra al mismo canal de voz que el bot para usar estos controles." });
+        return;
+      }
+
+      if (action === "queue") {
+        await interaction.editReply({ embeds: [musicQueueEmbed(player.snapshot())] });
+        return;
+      }
+
+      let response: string;
+      switch (action) {
+        case "previous": {
+          const previous = player.previous();
+          response = previous
+            ? `Volví a **${previous.title.slice(0, 120)}**.`
+            : "No hay una canción anterior en el historial.";
+          break;
+        }
+        case "toggle": {
+          const state = player.togglePause();
+          response = state === "paused"
+            ? "Reproducción pausada."
+            : state === "resumed"
+              ? "Reproducción reanudada."
+              : "No hay una canción que se pueda pausar.";
+          break;
+        }
+        case "skip":
+          response = player.skip()
+            ? "Pasé a la siguiente canción."
+            : "No hay una canción activa para omitir.";
+          break;
+        case "volume-down":
+        case "volume-up": {
+          const change = action === "volume-up" ? 10 : -10;
+          const volume = player.setVolume(player.snapshot().volume + change);
+          response = `Volumen: **${volume}%**${volume > 100 ? " (el refuerzo puede distorsionar el audio)." : ""}`;
+          break;
+        }
+        case "shuffle":
+          response = `Mezclé **${player.shuffle()}** canciones en espera.`;
+          break;
+        case "loop": {
+          const mode = player.cycleLoopMode();
+          response = `Repetición: **${mode === "off" ? "apagada" : mode === "track" ? "canción" : "cola"}**.`;
+          break;
+        }
+        case "stop":
+          player.stop();
+          response = "Detuve la reproducción y vacié la cola.";
+          break;
+        default:
+          await interaction.editReply({ content: "Ese control de música no existe." });
+          return;
+      }
+
+      if (action === "stop") {
+        await interaction.message.edit({
+          embeds: [successEmbed("Reproducción detenida", "Se vació la cola.")],
+          components: [],
+        }).catch(() => undefined);
+      } else {
+        const snapshot = player.snapshot();
+        if (snapshot.current) {
+          await interaction.message.edit(musicNowPlayingPayload(snapshot.current, snapshot)).catch(() => undefined);
+        }
+      }
+      await interaction.editReply({ content: response });
+    } catch (error) {
+      console.error(`[music-controls:${action}] No se pudo ejecutar el control.`, error);
+      const reply = { content: "No pude completar ese control. Inténtalo de nuevo." };
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(reply).catch(() => undefined);
+      } else {
+        await interaction.reply({ ...reply, ephemeral: true }).catch(() => undefined);
+      }
+    }
+  }
+
   destroy(guildId: string): void {
     const player = this.guildPlayers.get(guildId);
     player?.destroy();
@@ -93,6 +191,7 @@ export class GuildMusic {
   private textChannel?: SendableTextChannel;
   private queue: Track[] = [];
   private current?: Track;
+  private readonly history: Track[] = [];
   private currentResource?: AudioResource<Track>;
   private currentExtractor?: ReturnType<typeof ytDlp.exec>;
   private loopMode: LoopMode = "off";
@@ -100,6 +199,7 @@ export class GuildMusic {
   private startedAt = 0;
   private starting = false;
   private skipRequested = false;
+  private previousRequested = false;
   private idleTimer?: NodeJS.Timeout;
 
   constructor(
@@ -181,7 +281,13 @@ export class GuildMusic {
       loopMode: this.loopMode,
       volume: this.volume,
       elapsedSeconds: this.startedAt ? (Date.now() - this.startedAt) / 1000 : 0,
+      paused: this.player.state.status === AudioPlayerStatus.Paused,
+      previousCount: this.history.length,
     };
+  }
+
+  voiceChannelId(): string | undefined {
+    return this.connection?.joinConfig.channelId ?? undefined;
   }
 
   pause(): boolean {
@@ -192,8 +298,16 @@ export class GuildMusic {
     return this.player.unpause();
   }
 
+  togglePause(): "paused" | "resumed" | undefined {
+    if (this.player.state.status === AudioPlayerStatus.Paused) {
+      return this.resume() ? "resumed" : undefined;
+    }
+    return this.pause() ? "paused" : undefined;
+  }
+
   skip(): boolean {
     if (!this.current) return false;
+    const skippedTrack = this.current;
     const extractor = this.currentExtractor;
     this.currentExtractor = undefined;
     extractor?.kill("SIGTERM");
@@ -201,6 +315,8 @@ export class GuildMusic {
     const stopped = this.player.stop(true);
     if (!stopped) {
       this.skipRequested = false;
+      if (!this.previousRequested) this.remember(skippedTrack);
+      this.previousRequested = false;
       this.current = undefined;
       this.currentResource = undefined;
       void this.startNext();
@@ -208,27 +324,52 @@ export class GuildMusic {
     return stopped;
   }
 
+  previous(): Track | undefined {
+    const previousTrack = this.history.pop();
+    if (!previousTrack) return undefined;
+    this.queue.unshift(previousTrack);
+    if (this.current) {
+      this.previousRequested = true;
+      this.skip();
+    } else {
+      this.current = this.queue.shift();
+      void this.startNext();
+    }
+    return previousTrack;
+  }
+
   stop(): void {
     const extractor = this.currentExtractor;
     this.currentExtractor = undefined;
     extractor?.kill("SIGTERM");
     this.queue = [];
+    this.history.length = 0;
     this.current = undefined;
     this.currentResource = undefined;
     this.startedAt = 0;
     this.skipRequested = false;
+    this.previousRequested = false;
     this.player.stop(true);
     this.scheduleIdleDisconnect();
   }
 
   setVolume(value: number): number {
-    this.volume = Math.min(100, Math.max(0, Math.round(value)));
+    this.volume = Math.min(150, Math.max(0, Math.round(value)));
     this.currentResource?.volume?.setVolume(this.volume / 100);
     return this.volume;
   }
 
   setLoopMode(mode: LoopMode): void {
     this.loopMode = mode;
+  }
+
+  cycleLoopMode(): LoopMode {
+    this.loopMode = this.loopMode === "off"
+      ? "track"
+      : this.loopMode === "track"
+        ? "queue"
+        : "off";
+    return this.loopMode;
   }
 
   shuffle(): number {
@@ -258,8 +399,10 @@ export class GuildMusic {
     this.currentExtractor = undefined;
     extractor?.kill("SIGTERM");
     this.queue = [];
+    this.history.length = 0;
     this.current = undefined;
     this.currentResource = undefined;
+    this.previousRequested = false;
     this.player.stop(true);
     this.connection?.destroy();
     this.connection = undefined;
@@ -350,6 +493,8 @@ export class GuildMusic {
   private onIdle(): void {
     if (this.skipRequested) {
       this.skipRequested = false;
+      if (this.current && !this.previousRequested) this.remember(this.current);
+      this.previousRequested = false;
       this.current = undefined;
     } else if (this.current && this.loopMode === "track") {
       void this.startNext();
@@ -358,6 +503,7 @@ export class GuildMusic {
       this.queue.push(this.current);
       this.current = undefined;
     } else {
+      if (this.current) this.remember(this.current);
       this.current = undefined;
     }
 
@@ -369,8 +515,12 @@ export class GuildMusic {
   private async sendNowPlaying(track: Track): Promise<void> {
     const channel = this.textChannel;
     if (!channel) return;
-    const { musicNowPlayingEmbed } = await import("./embeds.js");
-    await channel.send({ embeds: [musicNowPlayingEmbed(track, 0)] }).catch(() => undefined);
+    await channel.send(musicNowPlayingPayload(track, this.snapshot())).catch(() => undefined);
+  }
+
+  private remember(track: Track): void {
+    this.history.push(track);
+    if (this.history.length > 25) this.history.shift();
   }
 
   private async sendNotice(content: string): Promise<void> {

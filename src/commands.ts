@@ -11,7 +11,7 @@ import {
   errorEmbed,
   menuPayload,
   musicQueueEmbed,
-  musicNowPlayingEmbed,
+  musicNowPlayingPayload,
   successEmbed,
 } from "./embeds.js";
 import { MusicManager, type SendableTextChannel } from "./music.js";
@@ -45,11 +45,15 @@ export class CommandHandler {
       if (["nowplaying", "np"].includes(command)) return await this.nowPlaying(message);
       if (command === "pause") return await this.pause(message);
       if (command === "resume") return await this.resume(message);
+      if (command === "previous" || command === "back") return await this.previous(message);
       if (command === "skip") return await this.skip(message);
       if (command === "stop") return await this.stop(message);
       if (command === "leave") return await this.leave(message);
-      if (command === "volume") return await this.volume(message, parts[0]);
-      if (command === "loop") return await this.loop(message, parts[0]);
+      if (["volume", "vol", "vol+", "vol-"].includes(command)) {
+        const value = command === "vol+" ? "+10" : command === "vol-" ? "-10" : parts[0];
+        return await this.volume(message, value);
+      }
+      if (command === "loop" || command === "repeat") return await this.loop(message, parts[0]);
       if (command === "shuffle") return await this.shuffle(message);
       if (command === "remove") return await this.remove(message, parts[0]);
       if (command === "clearqueue") return await this.clearQueue(message);
@@ -202,7 +206,7 @@ export class CommandHandler {
       return;
     }
     await message.reply({
-      embeds: [musicNowPlayingEmbed(current.current, current.elapsedSeconds)],
+      ...musicNowPlayingPayload(current.current, current),
     });
   }
 
@@ -239,6 +243,17 @@ export class CommandHandler {
     });
   }
 
+  private async previous(message: Message): Promise<void> {
+    const previous = this.music.get(message.guild!.id)?.previous();
+    await message.reply({
+      embeds: [
+        previous
+          ? successEmbed("Canción anterior", `Volví a **${previous.title.slice(0, 150)}**.`)
+          : errorEmbed("No hay una canción anterior en el historial."),
+      ],
+    });
+  }
+
   private async stop(message: Message): Promise<void> {
     const player = this.music.get(message.guild!.id);
     if (!player) {
@@ -261,16 +276,41 @@ export class CommandHandler {
   private async volume(message: Message, rawValue: string | undefined): Promise<void> {
     if (!rawValue) {
       const current = this.music.get(message.guild!.id)?.snapshot().volume ?? 70;
-      await message.reply({ embeds: [successEmbed("Volumen", `El volumen actual es **${current}%**. Usa \`!volume 0–100\` para cambiarlo.`)] });
+      await message.reply({
+        embeds: [
+          successEmbed(
+            "Volumen",
+            `El volumen actual es **${current}%**. Usa \`!volume 0–150\`, \`!volume +10/-10\`, \`!vol+\` o \`!vol-\`.`,
+          ),
+        ],
+      });
       return;
     }
-    const value = Number(rawValue);
-    if (!Number.isInteger(value) || value < 0 || value > 100) {
-      await message.reply({ embeds: [errorEmbed("Indica un número entero entre 0 y 100.")] });
+    const normalized = rawValue.toLowerCase();
+    const current = this.music.get(message.guild!.id)?.snapshot().volume ?? 70;
+    let value: number;
+    if (/^[+-]\d+$/.test(normalized)) {
+      value = current + Number(normalized);
+    } else if (["up", "subir", "más", "mas"].includes(normalized)) {
+      value = current + 10;
+    } else if (["down", "bajar", "menos"].includes(normalized)) {
+      value = current - 10;
+    } else if (["max", "máximo", "maximo"].includes(normalized)) {
+      value = 150;
+    } else if (["mute", "silencio", "min", "mínimo", "minimo"].includes(normalized)) {
+      value = 0;
+    } else {
+      value = Number(normalized);
+    }
+    if (!Number.isInteger(value) || value < 0 || value > 150) {
+      await message.reply({ embeds: [errorEmbed("Indica un volumen de 0 a 150, por ejemplo `!volume +10` o `!volume 80`.")] });
       return;
     }
     const volume = this.music.getOrCreate(message.guild!.id).setVolume(value);
-    await message.reply({ embeds: [successEmbed("Volumen ajustado", `El volumen ahora está en **${volume}%**.`)] });
+    const note = volume > 100 ? " El refuerzo sobre 100% puede distorsionar el audio." : "";
+    await message.reply({
+      embeds: [successEmbed("Volumen ajustado", `El volumen ahora está en **${volume}%**.${note}`)],
+    });
   }
 
   private async loop(message: Message, rawMode: string | undefined): Promise<void> {
@@ -325,12 +365,49 @@ export class CommandHandler {
       await this.assignRole(message, action === "quitar" || action === "remove");
       return;
     }
-    await message.reply({ embeds: [errorEmbed("Usa `!rol crear <nombre> [#HEX]`, `!rol asignar @persona @rol` o `!rol quitar @persona @rol`.")] });
+    if (["lista", "listar", "list"].includes(action)) {
+      await this.listRoles(message, args[0]);
+      return;
+    }
+    if (action === "info" || action === "ver") {
+      await this.roleInfo(message);
+      return;
+    }
+    if (["renombrar", "rename", "nombre"].includes(action)) {
+      await this.renameRole(message, args);
+      return;
+    }
+    if (action === "color") {
+      await this.colorRole(message, args);
+      return;
+    }
+    if (["mencionar", "mention"].includes(action)) {
+      await this.setRoleMentionable(message, args);
+      return;
+    }
+    await message.reply({
+      embeds: [
+        errorEmbed(
+          [
+            "Comandos de roles:",
+            "`!rol crear <nombre> [#HEX]`",
+            "`!rol asignar @persona @rol` · `!rol quitar @persona @rol`",
+            "`!rol lista [página]` · `!rol info @rol`",
+            "`!rol renombrar @rol <nombre>` · `!rol color @rol #HEX`",
+            "`!rol mencionar @rol on|off`",
+          ].join("\n"),
+        ),
+      ],
+    });
   }
 
   private async createRole(message: Message, args: string[]): Promise<void> {
     const rawColor = args.at(-1);
     const hasColor = !!rawColor && /^#?[0-9a-fA-F]{6}$/.test(rawColor);
+    if (rawColor?.startsWith("#") && !hasColor) {
+      await message.reply({ embeds: [errorEmbed("El color debe tener formato hexadecimal, por ejemplo `#7965F2`.")] });
+      return;
+    }
     const name = (hasColor ? args.slice(0, -1) : args).join(" ").trim();
     if (!name || name.length > 100) {
       await message.reply({ embeds: [errorEmbed("Indica un nombre de 1 a 100 caracteres: `!rol crear Comunidad #7965F2`.")] });
@@ -347,7 +424,7 @@ export class CommandHandler {
 
   private async assignRole(message: Message, remove: boolean): Promise<void> {
     const member = message.mentions.members?.first();
-    const role = message.mentions.roles.first() ?? await roleFromMessage(message);
+    const role = await this.mentionedRole(message);
     if (!member || !role) {
       await message.reply({ embeds: [errorEmbed("Menciona a la persona y al rol: `!rol asignar @persona @rol`.")] });
       return;
@@ -369,6 +446,111 @@ export class CommandHandler {
         ),
       ],
     });
+  }
+
+  private async listRoles(message: Message, rawPage: string | undefined): Promise<void> {
+    const allRoles = await message.guild!.roles.fetch();
+    const roles = [...allRoles.values()]
+      .filter((role) => role.id !== message.guild!.id && !role.managed)
+      .sort((a, b) => b.position - a.position);
+    const pageSize = 10;
+    const page = rawPage === undefined ? 1 : Number(rawPage);
+    const pages = Math.max(1, Math.ceil(roles.length / pageSize));
+    if (!Number.isInteger(page) || page < 1 || page > pages) {
+      await message.reply({ embeds: [errorEmbed(`Elige una página entre 1 y ${pages}.`)] });
+      return;
+    }
+    const pageRoles = roles.slice((page - 1) * pageSize, page * pageSize);
+    const lines = pageRoles.map((role) => {
+      const color = role.color ? `#${role.color.toString(16).padStart(6, "0").toUpperCase()}` : "sin color";
+      return `• **${escapeRoleName(role.name)}** — \`${color}\` — ${role.members.size} miembros`;
+    });
+    const embed = new EmbedBuilder()
+      .setColor(0x7965f2)
+      .setTitle("Roles del servidor")
+      .setDescription(lines.join("\n") || "No hay roles personalizados.")
+      .setFooter({ text: `Página ${page}/${pages} · ${roles.length} roles` });
+    await message.reply({ embeds: [embed] });
+  }
+
+  private async roleInfo(message: Message): Promise<void> {
+    const role = await this.mentionedRole(message);
+    if (!role) {
+      await message.reply({ embeds: [errorEmbed("Menciona el rol que quieres consultar: `!rol info @rol`.")] });
+      return;
+    }
+    const color = role.color ? `#${role.color.toString(16).padStart(6, "0").toUpperCase()}` : "Sin color";
+    const embed = new EmbedBuilder()
+      .setColor(role.color || DEFAULT_ROLE_COLOR)
+      .setTitle(`Rol: ${escapeRoleName(role.name)}`)
+      .addFields(
+        { name: "Color", value: color, inline: true },
+        { name: "Miembros", value: String(role.members.size), inline: true },
+        { name: "Mencionable", value: role.mentionable ? "Sí" : "No", inline: true },
+        { name: "Posición", value: String(role.position), inline: true },
+        { name: "ID", value: `\`${role.id}\``, inline: true },
+      );
+    await message.reply({ embeds: [embed] });
+  }
+
+  private async renameRole(message: Message, args: string[]): Promise<void> {
+    const role = await this.mentionedRole(message);
+    const name = args.filter((part) => !/^<@&\d{17,20}>$/.test(part)).join(" ").trim();
+    if (!role || !name || name.length > 100) {
+      await message.reply({
+        embeds: [errorEmbed("Usa `!rol renombrar @rol Nuevo nombre` (1–100 caracteres).")],
+      });
+      return;
+    }
+    if (!this.canManageTargetRole(message, role)) {
+      await message.reply({ embeds: [errorEmbed("No puedo editar ese rol: debe estar debajo del rol más alto del bot.")] });
+      return;
+    }
+    await role.edit({ name, reason: `Renombrado por ${message.author.tag} mediante LZ BOT` });
+    await message.reply({ embeds: [successEmbed("Rol renombrado", `Ahora se llama **${escapeRoleName(name)}**.`)] });
+  }
+
+  private async colorRole(message: Message, args: string[]): Promise<void> {
+    const role = await this.mentionedRole(message);
+    const rawColor = args.find((part) => /^#?[0-9a-fA-F]{6}$/.test(part));
+    if (!role || !rawColor) {
+      await message.reply({ embeds: [errorEmbed("Usa `!rol color @rol #7965F2`.")] });
+      return;
+    }
+    if (!this.canManageTargetRole(message, role)) {
+      await message.reply({ embeds: [errorEmbed("No puedo editar ese rol: debe estar debajo del rol más alto del bot.")] });
+      return;
+    }
+    const color = Number.parseInt(rawColor.replace("#", ""), 16);
+    await role.edit({ color, reason: `Color actualizado por ${message.author.tag} mediante LZ BOT` });
+    await message.reply({
+      embeds: [successEmbed("Color actualizado", `${role} ahora usa **#${color.toString(16).padStart(6, "0").toUpperCase()}**.`)],
+    });
+  }
+
+  private async setRoleMentionable(message: Message, args: string[]): Promise<void> {
+    const role = await this.mentionedRole(message);
+    const rawState = args.find((part) => /^(on|off|true|false|sí|si|no|activar|desactivar)$/i.test(part));
+    const enabled = rawState ? /^(on|true|sí|si|activar)$/i.test(rawState) : undefined;
+    if (!role || enabled === undefined) {
+      await message.reply({ embeds: [errorEmbed("Usa `!rol mencionar @rol on` o `!rol mencionar @rol off`.")] });
+      return;
+    }
+    if (!this.canManageTargetRole(message, role)) {
+      await message.reply({ embeds: [errorEmbed("No puedo editar ese rol: debe estar debajo del rol más alto del bot.")] });
+      return;
+    }
+    await role.edit({
+      mentionable: enabled,
+      reason: `Configuración de menciones actualizada por ${message.author.tag} mediante LZ BOT`,
+    });
+    await message.reply({
+      embeds: [successEmbed("Menciones de rol", `${role} ${enabled ? "ahora se puede mencionar" : "ya no se puede mencionar"}.`)],
+    });
+  }
+
+  private async mentionedRole(message: Message): Promise<Role | null> {
+    return message.mentions.roles.first() ?? (await roleFromMessage(message)) ?? null;
   }
 
   private async ping(message: Message): Promise<void> {
@@ -470,7 +652,10 @@ export class CommandHandler {
 
   private canManageTargetRole(message: Message, role: Role): boolean {
     const botHighestRole = message.guild!.members.me?.roles.highest;
-    return !!botHighestRole && !role.managed && role.position < botHighestRole.position;
+    return !!botHighestRole &&
+      role.id !== message.guild!.id &&
+      !role.managed &&
+      role.position < botHighestRole.position;
   }
 }
 
@@ -479,6 +664,10 @@ async function roleFromMessage(message: Message): Promise<Role | undefined> {
   const rawId = mentionId ?? message.content.match(/\b(\d{17,20})\b/)?.[1];
   if (!rawId) return undefined;
   return (await message.guild!.roles.fetch(rawId).catch(() => null)) ?? undefined;
+}
+
+function escapeRoleName(name: string): string {
+  return name.replace(/([\\*_`~|])/g, "\\$1").slice(0, 100);
 }
 
 async function fetchGuildChannel(

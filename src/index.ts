@@ -58,6 +58,10 @@ client.on("messageCreate", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
+  if (interaction.isButton() && interaction.customId.startsWith("lz-music:")) {
+    await music.handleButtonInteraction(interaction);
+    return;
+  }
   if (!interaction.isStringSelectMenu() || interaction.customId !== "lz-menu-category") return;
   try {
     await interaction.reply({ embeds: [categoryEmbed(interaction)], ephemeral: true });
