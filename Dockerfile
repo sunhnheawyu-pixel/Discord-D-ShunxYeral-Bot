@@ -1,11 +1,18 @@
 FROM node:24.17.0-bookworm-slim AS build
 
+ENV YOUTUBE_DL_SKIP_DOWNLOAD=1
 WORKDIR /app
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates python3 \
+  && apt-get install -y --no-install-recommends ca-certificates curl python3 \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
+RUN mkdir -p node_modules/youtube-dl-exec/bin \
+  && curl --fail --location --retry 5 --retry-all-errors --retry-delay 2 \
+    https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+    --output node_modules/youtube-dl-exec/bin/yt-dlp \
+  && chmod 0755 node_modules/youtube-dl-exec/bin/yt-dlp \
+  && node_modules/youtube-dl-exec/bin/yt-dlp --version
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build

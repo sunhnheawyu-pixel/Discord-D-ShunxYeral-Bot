@@ -59,7 +59,11 @@ client.on("messageCreate", async (message) => {
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isStringSelectMenu() || interaction.customId !== "lz-menu-category") return;
-  await interaction.reply({ embeds: [categoryEmbed(interaction)], ephemeral: true });
+  try {
+    await interaction.reply({ embeds: [categoryEmbed(interaction)], ephemeral: true });
+  } catch (error) {
+    console.error("[menu] No se pudo responder a la categoría seleccionada.", error);
+  }
 });
 
 client.on("guildMemberAdd", async (member) => {

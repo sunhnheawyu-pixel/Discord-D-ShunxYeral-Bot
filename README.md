@@ -15,7 +15,7 @@ Bot de Discord en español con reproductor musical, gestión de roles, mensajes 
 
 - Node.js **24.17.0 o superior**.
 - Python 3.11 o superior y FFmpeg para audio. Docker instala ambos automáticamente.
-- `npm ci` instala `youtube-dl-exec`, que descarga la versión estable actual de yt-dlp.
+- En Docker, `npm ci` no descarga medios: el Dockerfile obtiene después la versión estable actual de yt-dlp directamente desde sus lanzamientos oficiales.
 - Una aplicación de bot creada en [Discord Developer Portal](https://discord.com/developers/applications).
 - El secreto `DISCORD_TOKEN`. Nunca lo guardes en el código ni lo subas al repositorio.
 
@@ -48,11 +48,11 @@ npm run dev
 ```
 
 El archivo `.env` está excluido de Git. La carpeta `data/` guarda configuración local y también está excluida.
-El reproductor usa yt-dlp para buscar y abrir audio; al instalar dependencias se descarga su binario oficial actual. En Linux asegúrate de tener Python 3.11+ y FFmpeg.
+El reproductor usa yt-dlp para buscar y abrir audio. En una instalación local, `npm ci` obtiene su binario oficial; en Docker, el Dockerfile descarga el binario en un paso separado para que un fallo del servicio de lanzamientos no interrumpa `npm ci`. En Linux asegúrate de tener Python 3.11+ y FFmpeg.
 
 ## Railway
 
-El repositorio incluye un `Dockerfile`; Railway lo detecta y prepara Node.js, Python 3.11+, FFmpeg y el binario actual de yt-dlp.
+El repositorio incluye un `Dockerfile`; Railway lo detecta y prepara Node.js, Python 3.11+, FFmpeg y el binario actual de yt-dlp. El Dockerfile separa la descarga de yt-dlp de `npm ci` para que la instalación de paquetes no dependa de la API de GitHub.
 
 1. Crea un proyecto y agrega un servicio desde el repositorio de GitHub.
 2. Usa la raíz del repositorio como directorio de servicio.

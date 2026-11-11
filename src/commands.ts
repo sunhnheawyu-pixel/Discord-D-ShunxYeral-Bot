@@ -61,6 +61,7 @@ export class CommandHandler {
       if (command === "purge") return await this.purge(message, parts[0]);
       if (command === "poll") return await this.poll(message, parts.join(" "));
     } catch (error) {
+      console.error(`[commands] Falló el comando !${command}.`, error);
       const description = error instanceof Error ? error.message : "Ocurrió un error inesperado.";
       await message.reply({ embeds: [errorEmbed(description)] }).catch(() => undefined);
     }

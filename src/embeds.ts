@@ -55,10 +55,10 @@ export function menuPayload() {
     .setCustomId("lz-menu-category")
     .setPlaceholder("Explorar comandos")
     .addOptions(
-      { label: "Música", value: "music", description: "Reproductor y cola", emoji: "♫" },
-      { label: "Comunidad", value: "community", description: "Bienvenida y servidor", emoji: "✦" },
-      { label: "Roles", value: "roles", description: "Crear y asignar roles", emoji: "◆" },
-      { label: "Moderación", value: "moderation", description: "Herramientas de moderación", emoji: "◈" },
+      { label: "Música", value: "music", description: "Reproductor y cola", emoji: "🎶" },
+      { label: "Comunidad", value: "community", description: "Bienvenida y servidor", emoji: "👋" },
+      { label: "Roles", value: "roles", description: "Crear y asignar roles", emoji: "🎭" },
+      { label: "Moderación", value: "moderation", description: "Herramientas de moderación", emoji: "🛡️" },
     );
 
   return {
